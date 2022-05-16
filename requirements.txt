@@ -1,10 +1,11 @@
 # Used for evaluation and some common for train too
 numpy
 pyext>=0.7
-sacrebleu # we used 1.5.1
-sacremoses # we used 0.0.45
-tensorflow # requires tensorflow 2.0 or above for transformers
+sacrebleu==1.5.1 # we used 1.5.1
+sacremoses==0.0.45 # we used 0.0.45
+# tensorflow # requires tensorflow 2.0 or above for transformers
 torch>=1.7
+tokenizers>=0.12.1
 transformers>=4 
 psutil # we used 5.7.0
 

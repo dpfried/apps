@@ -2,3 +2,9 @@
 APPS.tar.gz
 apps_dataset/*
 
+eval/expts/
+
+__pycache__/
+train_and_test.json
+data
+

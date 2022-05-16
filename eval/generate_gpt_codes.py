@@ -21,6 +21,10 @@ from reindent import run as run_reindent
 from datetime import datetime, date
 from tqdm import tqdm
 
+MAX_LENGTH = 1024
+
+EXTENSION_LENGTH = 512
+
 
 def reindent_code(codestr):
     """
@@ -48,8 +52,37 @@ def reindent_code(codestr):
 
     return ret.getvalue()
 
-def generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer, starter_path=None):
-    _input = "\nQUESTION:\n"
+def truncate_at_stop_words(tokenizer, stop_words, sequence_ids, logprobs=None, show_warnings=True):
+    # search for stopwords, to truncate after them
+    full_seq_decoded = tokenizer.decode(sequence_ids, skip_special_tokens=False)
+    min_index = None
+    for stop_word in stop_words:
+        index = full_seq_decoded.find(stop_word)
+        if index < 0:
+            continue
+        if min_index is None or index < min_index:
+            min_index = index
+    
+    if min_index is not None:
+        # if you we find one of the stopwords, then we delete everything from the stopword on
+        seq_decoded = full_seq_decoded[:min_index]
+        # figure out how many tokens to take from log probs by reencoding the truncated string
+        # TODO: this may not exactly be right since this I don't think BPE is a prefix code
+        seq = tokenizer.encode(seq_decoded, add_special_tokens=True)
+        if logprobs is not None:
+            logprobs = logprobs[:len(seq)]
+    else:
+        if show_warnings:
+            print('no stopword found!') # not having any stopword found is probably a very bad sign
+        seq = sequence_ids
+        seq_decoded = full_seq_decoded
+    return seq, seq_decoded, logprobs
+
+def generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer, starter_path=None, notebook_formatting=False):
+    if notebook_formatting:
+        _input = "<| file ext=.ipynb:python |>\n<text>\n"
+    else:
+        _input = "\nQUESTION:\n"
     with open(prompt_path, "r") as f:
         data = f.readlines()
         data = "".join(data)
@@ -71,7 +104,10 @@ def generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer
     else:
         _input += "\nUse Call-Based format"#\n"
     
-    _input += "\nANSWER:\n"
+    if notebook_formatting:
+        _input += "\n</text>\n<cell>\n"
+    else:
+        _input += "\nANSWER:\n"
 
     if args.peeking > 0.0:
         # Need to do some peeking. 
@@ -134,17 +170,38 @@ def main(args):
             end = args.end
         problems = problems[start:end]
 
-    # Tokenizer
-    tokenizer = transformers.GPT2Tokenizer.from_pretrained(args.arch)
-
-    # Set up model
     print("Loading model...")
-    model = transformers.GPT2LMHeadModel.from_pretrained(args.load)
+    if args.arch.startswith("facebook/incoder"):
+        global MAX_LENGTH
+        MAX_LENGTH = 2048
+        tokenizer = transformers.AutoTokenizer.from_pretrained(args.arch)
+        if args.arch == "facebook/incoder-6B":
+            kwargs = dict(
+                        revision="float16", 
+                        torch_dtype=torch.float16,
+                        low_cpu_mem_usage=True,
+                    )
+        else:
+            kwargs = {}
+        model = transformers.AutoModelForCausalLM.from_pretrained(args.load or args.arch, **kwargs)
+
+        stop_words = ["<|", "<|/", "<code>", "</code>", "<cell>", "</cell>", "<text>", "</text>"]
+        notebook_formatting = True
+    else:
+        # Tokenizer
+        tokenizer = transformers.GPT2Tokenizer.from_pretrained(args.arch)
+
+        # Set up model
+        model = transformers.AutoModelForCausalLM.from_pretrained(args.load)
+
+        stop_words = ["ANSWER:"]
+        notebook_formatting = False
+
     model.cuda()
-    print(f"Loaded {args.load}.")
+    print(f"Loaded {args.arch}: {args.load or ''}.")
 
     # main eval loop
-    for index, problem in enumerate(tqdm(problems)):
+    for index, problem in enumerate(tqdm(problems, ncols=80)):
         prob_path = os.path.join(args.root, problem)
         if args.debug:
             print(f"problem path = {prob_path}")
@@ -159,7 +216,7 @@ def main(args):
             continue
 
         # Read the question in
-        prompt_text, sample_sol = generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer, starter_path)
+        prompt_text, sample_sol = generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer, starter_path, notebook_formatting=notebook_formatting)
         if args.debug:
             print("PROMPT_TEXT:")
             print(prompt_text)
@@ -168,19 +225,32 @@ def main(args):
         start = time.time()
         try:
             with torch.no_grad():
-                input_ids = torch.LongTensor(tokenizer.encode(prompt_text, verbose=False)).unsqueeze(0).cuda()
+                # input_ids = torch.LongTensor(tokenizer.encode(prompt_text, verbose=False)).unsqueeze(0).cuda()
+                input_ids = tokenizer.encode(prompt_text, return_tensors='pt').cuda()
                 output_ids = model.generate(
                     input_ids,
-                    num_beams=args.num_beams,
-                    early_stopping=True,
-                    max_length=1024 - len(input_ids)
+                    #num_beams=args.num_beams,
+                    #early_stopping=True,
+                    do_sample=True, 
+                    top_p=0.95,
+                    temperature=0.2,
+                    max_length=min(MAX_LENGTH, input_ids.size(1) + EXTENSION_LENGTH),
                 )
-                output_str = tokenizer.decode(output_ids[0])
+                if args.debug:
+                    print("input size:")
+                    print(input_ids.size())
+                    print("output size:")
+                    print(output_ids.size())
+                output_ids = output_ids[0][input_ids.size(1):]
+                if stop_words:
+                    output_ids, output_str, _ = truncate_at_stop_words(tokenizer, stop_words, output_ids)
+                else:
+                    output_str = tokenizer.decode(output_ids)
         except Exception as e:
             if isinstance(e, UnboundLocalError) and str(e) == "local variable 'next_tokens' referenced before assignment":
                 # See https://github.com/huggingface/transformers/issues/5118
                 if args.debug:
-                    print("Problem text was > 1024 tokens, so cannot do generation")
+                    print(f"Problem text was > {MAX_LENGTH} tokens, so cannot do generation")
                     print(e)
             else:
                 print("Unexpected exception in generating solution")
@@ -192,7 +262,9 @@ def main(args):
         if args.peeking == 1.0:
             output_str = sample_sol
         elif len(output_str):
-            output_str = output_str.split("ANSWER:\n")[1].replace("<|endoftext|>", "")
+            output_str = output_str.replace("<|endoftext|>", "")
+            # split_str = "<cell>\n" if notebook_formatting else "ANSWER:\n"
+            # output_str = output_str.split(split_str)[1].replace("<|endoftext|>", "")
 
         # Save the generated sol
         gpt_codes[index+args.start] = output_str
@@ -211,10 +283,10 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Run a tranined model to generate Python code.")
-    parser.add_argument("--arch", default="gpt2", choices=transformers.GPT2_PRETRAINED_MODEL_ARCHIVE_LIST)
+    parser.add_argument("--arch", default="gpt2", choices=transformers.GPT2_PRETRAINED_MODEL_ARCHIVE_LIST + ["facebook/incoder-6B", "facebook/incoder-1B"])
     parser.add_argument("-t","--test_loc", default="~/apps/data_split/test.json", type=str)
     parser.add_argument("-r","--root", default="../", type=str, help="where the data is stored.")
-    parser.add_argument("-l","--load", default="~/apps/models/checkpoints/final", type=str)
+    parser.add_argument("-l","--load", type=str)
     parser.add_argument("--peeking", default=0.0, type=float)
     parser.add_argument("--num-beams", default=5, type=int)
     parser.add_argument("-s","--start", default=0, type=int)
