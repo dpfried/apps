@@ -78,11 +78,16 @@ def truncate_at_stop_words(tokenizer, stop_words, sequence_ids, logprobs=None, s
         seq_decoded = full_seq_decoded
     return seq, seq_decoded, logprobs
 
-def generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer, starter_path=None, notebook_formatting=False):
+def generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer, starter_path=None, notebook_formatting=False, notebook_beginning=False):
     if notebook_formatting:
-        _input = "<| file ext=.ipynb:python |>\n<text>\n"
+        if notebook_beginning:
+            _input = "<| file ext=.ipynb:python |>\n"
+        else:
+            _input = ""
+        _input += "<text>\n"
     else:
         _input = "\nQUESTION:\n"
+    
     with open(prompt_path, "r") as f:
         data = f.readlines()
         data = "".join(data)
@@ -109,13 +114,15 @@ def generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer
     else:
         _input += "\nANSWER:\n"
 
+    with open(solutions_path, 'r') as f:
+        sols = json.load(f)
+
+    short_sol = min(sols, key=len)
+
     if args.peeking > 0.0:
         # Need to do some peeking. 
 
         # Read one example solution
-        with open(solutions_path, 'r') as f:
-            sols = json.load(f)
-
         # Choose the shortest solution for the model to use.
         # This is so we can conserve tokens (1024 max)
         # sample_sol = min(sols, key=len)
@@ -136,7 +143,7 @@ def generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer
     else:
         sample_sol = None
 
-    return _input, sample_sol
+    return _input, sample_sol, short_sol
 
 
 def main(args):
@@ -144,6 +151,9 @@ def main(args):
     argsdict = vars(args)
     print(pprint.pformat(argsdict))
 
+    with open(args.train_loc, "r") as f:
+        train_problems = json.load(f)
+    train_problems = sorted(train_problems)
     with open(args.test_loc, "r") as f:
         problems = json.load(f)
     problems = sorted(problems) # Pin some ordering
@@ -176,11 +186,12 @@ def main(args):
         MAX_LENGTH = 2048
         tokenizer = transformers.AutoTokenizer.from_pretrained(args.arch)
         if args.arch == "facebook/incoder-6B":
-            kwargs = dict(
-                        revision="float16", 
-                        torch_dtype=torch.float16,
-                        low_cpu_mem_usage=True,
-                    )
+            # kwargs = dict(
+            #             revision="float16", 
+            #             torch_dtype=torch.float16,
+            #             low_cpu_mem_usage=True,
+            #         )
+            kwargs = {}
         else:
             kwargs = {}
         model = transformers.AutoModelForCausalLM.from_pretrained(args.load or args.arch, **kwargs)
@@ -200,27 +211,58 @@ def main(args):
     model.cuda()
     print(f"Loaded {args.arch}: {args.load or ''}.")
 
+    def generate_prompt_from_path(prob_path):
+        test_case_path = os.path.join(prob_path, "input_output.json")
+        prompt_path = os.path.join(prob_path, "question.txt")
+        starter_path = os.path.join(prob_path, "starter_code.py")
+        solutions_path = os.path.join(prob_path, "solutions.json")
+
+        if not os.path.exists(starter_path):
+            starter_path = None
+        if not os.path.exists(test_case_path) or not os.path.exists(prompt_path):
+            return None, None, None
+
+        # Read the question in
+        prompt_text, sample_sol, short_sol = generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer, starter_path, notebook_formatting=notebook_formatting)
+        return prompt_text, sample_sol, short_sol
+
+    if args.k_shot_prompts > 0:
+        print(f"len(train_problems): {len(train_problems)}")
+        k_shot_prompts = []
+        for path in train_problems:
+            prob_path = os.path.join(args.root, path)
+            prompt_text, sample_sol, short_sol = generate_prompt_from_path(prob_path)
+            if prompt_text is None:
+                continue
+            this_prompt = prompt_text + short_sol
+            if notebook_formatting:
+                this_prompt += "\n</cell>"
+            k_shot_prompts.append(this_prompt)
+            if len(k_shot_prompts) >= args.k_shot_prompts:
+                break
+        print(f"len(k_shot_prompts): {len(k_shot_prompts)}")
+        if args.debug:
+            print("K_SHOT_PROMPTS:")
+            print("\n".join(k_shot_prompts))
+    else:
+        k_shot_prompts = []
+
     # main eval loop
     for index, problem in enumerate(tqdm(problems, ncols=80)):
         prob_path = os.path.join(args.root, problem)
         if args.debug:
             print(f"problem path = {prob_path}")
-
-        test_case_path = os.path.join(prob_path, "input_output.json")
-        prompt_path = os.path.join(prob_path, "question.txt")
-        starter_path = os.path.join(prob_path, "starter_code.py")
-        solutions_path = os.path.join(prob_path, "solutions.json")
-        if not os.path.exists(starter_path):
-                starter_path = None
-        if not os.path.exists(test_case_path) or not os.path.exists(prompt_path):
+        prompt_text, sample_sol, short_sol = generate_prompt_from_path(prob_path)
+        if prompt_text is None:
             continue
 
-        # Read the question in
-        prompt_text, sample_sol = generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer, starter_path, notebook_formatting=notebook_formatting)
         if args.debug:
             print("PROMPT_TEXT:")
             print(prompt_text)
         
+        if k_shot_prompts:
+            prompt_text = "\n".join(k_shot_prompts) + "\n" + prompt_text
+
         # Feed this into the model.
         start = time.time()
         try:
@@ -285,6 +327,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run a tranined model to generate Python code.")
     parser.add_argument("--arch", default="gpt2", choices=transformers.GPT2_PRETRAINED_MODEL_ARCHIVE_LIST + ["facebook/incoder-6B", "facebook/incoder-1B"])
     parser.add_argument("-t","--test_loc", default="~/apps/data_split/test.json", type=str)
+    parser.add_argument("--train_loc", default="~/apps/data_split/train.json", type=str)
     parser.add_argument("-r","--root", default="../", type=str, help="where the data is stored.")
     parser.add_argument("-l","--load", type=str)
     parser.add_argument("--peeking", default=0.0, type=float)
@@ -294,6 +337,8 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--index", default=None, type=int)
     parser.add_argument("-d", "--debug", action="store_true")
     parser.add_argument("--save", type=str, default="./results")
+
+    parser.add_argument("--k_shot_prompts", type=int, default=0)
  
     args = parser.parse_args()
 

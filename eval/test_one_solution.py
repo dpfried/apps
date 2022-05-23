@@ -24,19 +24,24 @@ def print_results(results, args):
     per_prob_res = []
     all_correct = []
     for index in results:
-       res.extend(results[index])
-       per_prob_res.append(np.mean(results[index]))
-       all_correct.append(np.all(results[index]))
-    tmp_results = res
+        this_results = results[index]
+        assert len(this_results) == 1
+        this_results = this_results[0]
+        res.extend(this_results)
+        this_results = np.array(this_results)
+        this_results[this_results < 0] = 0
+        per_prob_res.append(np.mean(this_results))
+        all_correct.append(np.all(this_results))
+    tmp_results = np.array(res)
     compile_errors = len(tmp_results[tmp_results==-2])
     runtime_errors = len(tmp_results[tmp_results==-1])
     failures = len(tmp_results[tmp_results==False])
     successes = len(tmp_results[tmp_results==True])
     total_testcases = len(res)
-    if args.debug:
-        print(f"number of compile errors = {compile_errors} avg = {compile_errors / total_testcases }")
-        print(f"number of runtime errors = {runtime_errors} avg = {runtime_errors / total_testcases}")
-        print(f"number of test cases run = {total_testcases}")
+
+    print(f"number of compile errors = {compile_errors} avg = {compile_errors / total_testcases }")
+    print(f"number of runtime errors = {runtime_errors} avg = {runtime_errors / total_testcases}")
+    print(f"number of test cases run = {total_testcases}")
 
     print(f"Test Case Average (average accuracy over problems) = {np.mean(per_prob_res)}")
     print(f"Strict Accuracy (all test cases passed / total problems) = {np.mean(all_correct)}")
@@ -83,9 +88,10 @@ def eval_and_save_problems(args):
     # main eval loop
     for index, problem in enumerate(tqdm(problems)):
         try:
+            output_str = gpt_codes[str(index+args.start)]
             if args.debug:
                 print(f"\n\nproblem path = {problem}")
-            output_str = gpt_codes[str(index+args.start)]
+                print(output_str)
         except:
             print("CANNOT FIND OUTPUT_STR FOR", problem)
             continue
@@ -97,10 +103,17 @@ def eval_and_save_problems(args):
         if not os.path.exists(args.save):
             os.makedirs(args.save)
 
+        if isinstance(output_str, str):
+            outputs = [output_str]
+        else:
+            assert isinstance(output_str, list)
+            outputs = output_str
+
         res = []
-        for o_idx, o in enumerate(output_str):
+        for o_idx, o in enumerate(outputs):
             if args.debug:
                 print(f"\nTesting solution {o_idx}")
+                print(f"{o}")
             curr_res = [-2]
             try:
                 curr_res = test_util.run_test(prob_path=prob_path, test=o, debug=args.debug)
