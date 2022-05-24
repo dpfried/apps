@@ -38,6 +38,8 @@ class APPSBaseDataset(torch.utils.data.Dataset):
 
         if ('EleutherAI' in mode or '2700' in mode):
             self.tokenizer = transformers.GPT2Tokenizer.from_pretrained("EleutherAI/gpt-neo-2.7B")
+        elif 'facebook' in mode:
+            self.tokenizer = transformers.AutoTokenizer.from_pretrained("facebook/incoder-1B")
         elif 'gpt' in self.mode: # Should handle GPT-2 and GPT-Neo
             self.tokenizer = transformers.GPT2Tokenizer.from_pretrained(mode)
         elif self.mode in {'codebert'}:

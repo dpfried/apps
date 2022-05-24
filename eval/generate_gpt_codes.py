@@ -324,8 +324,13 @@ def main(args):
 if __name__ == "__main__":
     import argparse
 
+    MODEL_ARCHS = transformers.GPT2_PRETRAINED_MODEL_ARCHIVE_LIST + [
+        "facebook/incoder-6B",
+        "facebook/incoder-1B",
+        ]
+
     parser = argparse.ArgumentParser(description="Run a tranined model to generate Python code.")
-    parser.add_argument("--arch", default="gpt2", choices=transformers.GPT2_PRETRAINED_MODEL_ARCHIVE_LIST + ["facebook/incoder-6B", "facebook/incoder-1B"])
+    parser.add_argument("--arch", default="gpt2", choices=MODEL_ARCHS)
     parser.add_argument("-t","--test_loc", default="~/apps/data_split/test.json", type=str)
     parser.add_argument("--train_loc", default="~/apps/data_split/train.json", type=str)
     parser.add_argument("-r","--root", default="../", type=str, help="where the data is stored.")

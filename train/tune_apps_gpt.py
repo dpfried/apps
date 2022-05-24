@@ -47,6 +47,8 @@ def run_training(args, train_data):
     else:
         if "EleutherAI" in args.arch:
             model = transformers.GPTNeoForCausalLM.from_pretrained(args.arch)
+        elif "facebook" in args.arch:
+            model = transformers.AutoModelForCausalLM.from_pretrained(args.arch)
         else:
             model = transformers.GPT2LMHeadModel.from_pretrained(args.arch)
 
@@ -98,6 +100,7 @@ def run_training(args, train_data):
 
         deepspeed=args.deepspeed,
         fp16=args.fp16,
+        gradient_checkpointing=args.gradient_checkpointing,
     )
 
     trainer = transformers.Trainer(
@@ -122,7 +125,7 @@ def get_dataset(args):
         dataroot=args.apps_dataroot, 
         problem_dirs=fnames,
         mode=args.arch, 
-        max_tokens=2048 if ('EleutherAI' in args.arch or '2700' in args.load) else 1024,
+        max_tokens=2048 if ('EleutherAI' in args.arch or 'facebook' in args.arch or '2700' in args.load) else 1024,
         sample_mode=args.apps_sample_mode
     )
 
@@ -148,8 +151,15 @@ def main(args):
 if __name__ == "__main__":
     import argparse
 
+    MODEL_ARCHS = transformers.GPT2_PRETRAINED_MODEL_ARCHIVE_LIST + [
+        "EleutherAI/gpt-neo-1.3B",
+        "EleutherAI/gpt-neo-2.7B",
+        "facebook/incoder-6B",
+        "facebook/incoder-1B",
+        ]
+
     parser = argparse.ArgumentParser(description="Language Modelling on Code")
-    parser.add_argument('--arch', default='gpt2', choices=transformers.GPT2_PRETRAINED_MODEL_ARCHIVE_LIST + ["EleutherAI/gpt-neo-2.7B"])
+    parser.add_argument('--arch', default='gpt2', choices=MODEL_ARCHS)
     parser.add_argument('--dummy-model', action='store_true')
     parser.add_argument('--load', default=None, type=str)
     parser.add_argument('--resume', default=None, type=str)
@@ -168,6 +178,7 @@ if __name__ == "__main__":
     parser.add_argument('--local_rank', default=-1, type=int)
     parser.add_argument('--deepspeed', default=None, type=str)
     parser.add_argument('--fp16', default=False, action='store_true')
+    parser.add_argument('--gradient-checkpointing', default=False, action='store_true')
 
     # Logging and stuff
     parser.add_argument('--save-dir', default="checkpoints/TEMP", type=str)
