@@ -34,6 +34,9 @@ from CustomTensorboardCallback import CustomTensorBoardCallback
 import torch.multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
 
+class NoCheckpointingFilter(logging.Filter):
+    def filter(self, record):
+        return 'is incompatible with gradient checkpointing' not in record.getMessage()
 
 def run_training(args, train_data):
 
@@ -61,6 +64,10 @@ def run_training(args, train_data):
         print("start_iteration = ", start_iteration)
     else:
         start_iteration = 0
+
+    # suppress warnings about use_cache=True being incompatible with gradient checkpointing
+    logger = logging.getLogger(model.__module__)
+    logger.addFilter(NoCheckpointingFilter())
 
     ## Dataloading ######################################################## 
     train_data.start_iteration = start_iteration
@@ -131,7 +138,6 @@ def get_dataset(args):
 
     return train_data
 
-
 def main(args):
 
     argsdict = vars(args)
@@ -188,5 +194,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     args.save_dir = os.path.join(args.save_dir, datetime.now().strftime("%m-%d-%Y__%H:%M:%S"))
-    
+
     main(args)
