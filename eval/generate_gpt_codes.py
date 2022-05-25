@@ -105,9 +105,11 @@ def generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer
     with open(test_case_path, "r") as f:
         data = json.load(f)
     if not data.get("fn_name"):
-        _input += "\nUse Standard Input format"#\n"
+        # _input += "\nUse Standard Input format"#\n"
+        _input += "\nUse Standard Input format\n"
     else:
-        _input += "\nUse Call-Based format"#\n"
+        # _input += "\nUse Call-Based format"#\n"
+        _input += "\nUse Call-Based format\n"
     
     if notebook_formatting:
         _input += "\n</text>\n<cell>\n"
@@ -117,7 +119,9 @@ def generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer
     with open(solutions_path, 'r') as f:
         sols = json.load(f)
 
-    short_sol = min(sols, key=len)
+    reindented_sols = [reindent_code(sol) for sol in sols]
+
+    short_sol = min(reindented_sols, key=len)
 
     if args.peeking > 0.0:
         # Need to do some peeking. 
@@ -134,8 +138,7 @@ def generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer
         # _input += tokenizer.decode(sample_sol_token_ids)
 
         # Alternatively take a random solution
-        sample_sol = random.choice(sols)
-        rand_sol = reindent_code(sample_sol)
+        sample_sol = rand_sol = random.choice(reindented_sols)
         rand_sol = tokenizer.encode(rand_sol, verbose=False)
         tokens_taken = int(args.peek_frac * len(rand_sol))
         rand_sol = rand_sol[:tokens_taken]

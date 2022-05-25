@@ -31,8 +31,8 @@ from CustomTensorboardCallback import CustomTensorBoardCallback
 # torch.set_num_threads(2)
 
 # https://github.com/pytorch/pytorch/issues/11201
-import torch.multiprocessing
-torch.multiprocessing.set_sharing_strategy('file_system')
+# import torch.multiprocessing
+# torch.multiprocessing.set_sharing_strategy('file_system')
 
 class NoCheckpointingFilter(logging.Filter):
     def filter(self, record):
@@ -100,7 +100,7 @@ def run_training(args, train_data, valid_data):
         save_total_limit=None,
 
         dataloader_drop_last=True,
-        dataloader_num_workers=3,
+        dataloader_num_workers=0,
 
         local_rank=args.local_rank,
 
@@ -185,6 +185,7 @@ def main(args):
 
 if __name__ == "__main__":
     import argparse
+    print(' '.join(sys.argv))
 
     MODEL_ARCHS = transformers.GPT2_PRETRAINED_MODEL_ARCHIVE_LIST + [
         "EleutherAI/gpt-neo-1.3B",

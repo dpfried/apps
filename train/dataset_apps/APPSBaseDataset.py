@@ -19,10 +19,41 @@ import io
 
 import transformers
 
+from collections import namedtuple
+from typing import List
+
 from dataset_lm.reindent import run as run_reindent
 from tqdm import tqdm 
 
 import json
+
+Sample = namedtuple("Sample", ["question_str", "starter_code", "sol_str", "answer_type"])
+
+def reindent_code(codestr):
+    """
+    Given code string, reindent it in the same way that the
+    Github dataset was indented
+    """
+    codestr = io.StringIO(codestr)
+    ret = io.StringIO()
+
+    run_reindent(
+        codestr, 
+        ret, 
+        config = {
+            "dry-run": False,
+            "help": False,
+            "to": 4,
+            "from": -1,
+            "tabs": True,
+            "encoding": "utf-8",
+            "is-tabs": False,
+            "tabsize": 4,
+            "all-tabs": False
+        }
+    )
+
+    return ret.getvalue()
 
 class APPSBaseDataset(torch.utils.data.Dataset):
     def __init__(self, dataroot, problem_dirs, mode, max_tokens, sample_mode):
@@ -47,6 +78,62 @@ class APPSBaseDataset(torch.utils.data.Dataset):
         else:
             raise NotImplementedError()
 
+    @staticmethod
+    def load_samples(dataroot, problem_name):
+        test_case_path = os.path.join(dataroot, problem_name, "input_output.json")
+        question_fname = os.path.join(dataroot, problem_name, "question.txt")
+        sols_fname = os.path.join(dataroot, problem_name, "solutions.json")
+        starter_code = os.path.join(dataroot, problem_name, "starter_code.py")
+
+        # with open(test_case_path, "r") as f:
+        #     test_data = json.load(f)
+        # print(question_fname)
+
+        if os.path.exists(starter_code):
+            answer_type = "\nUse Call-Based format\n"
+            # assert bool(test_data.get("fn_name"))
+        else:
+            answer_type = "\nUse Standard Input format\n"
+            # assert not bool(test_data.get("fn_name"))
+
+        if (not os.path.isfile(question_fname)) or (not os.path.isfile(sols_fname)):
+            return None
+
+        if (os.path.isfile(starter_code)):
+            with open(starter_code, 'r') as f:
+                starter_code = f.read()
+        else:
+            starter_code = ""
+
+        # Read the question description
+        with open(question_fname, 'r') as f:
+            question_str = f.read()
+
+        samples = []
+
+        # Read all the solutions
+        with open(sols_fname, 'r') as f:
+            sols_str_list = json.load(f)
+            for sol_str in sols_str_list:
+                sol_str = reindent_code(sol_str)
+                sample = Sample(question_str, starter_code, sol_str, answer_type)
+                samples.append(sample)
+        return samples
+
+    @staticmethod
+    def prompt_from_sample(sample: Sample, notebook_formatting: bool):
+        if notebook_formatting:
+            prompt = "<text>\n" + sample.question_str 
+            if sample.starter_code:
+                prompt += "\n</text>\n<code>\n"
+                prompt += sample.starter_code
+                prompt += "\n</code>\n<text>\n"
+            prompt += "\n" + sample.answer_type
+            prompt += "\n</text>\n"
+            prompt += "\n<cell>\n"
+        else:
+            prompt =  "\nQUESTION:\n" + sample.question_str + "\n" + sample.starter_code + "\n" + sample.answer_type + "\nANSWER:\n"
+        return prompt
 
     def initialize(self):
         """
@@ -60,45 +147,16 @@ class APPSBaseDataset(torch.utils.data.Dataset):
 
         print(f"Loading {len(self.problem_dirs)} problems from {self.dataroot}.")
         for problem_name in tqdm(self.problem_dirs):
-            question_fname = os.path.join(self.dataroot, problem_name, "question.txt")
-            sols_fname = os.path.join(self.dataroot, problem_name, "solutions.json")
-            starter_code = os.path.join(self.dataroot, problem_name, "starter_code.py")
-
-            # print(question_fname)
-
-            if os.path.exists(starter_code):
-                answer_type = "\nUse Call-Based format\n"
+            samples = self.load_samples(self.dataroot, problem_name)
+            if samples is not None:
+                all_samples.extend(samples)
+                question_str = samples[0][0]
+                assert question_str not in all_samples_dict, (problem_name, question_str)
+                all_samples_dict[question_str] = samples
             else:
-                answer_type = "\nUse Standard Input format\n"
-
-            if (not os.path.isfile(question_fname)) or (not os.path.isfile(sols_fname)):
                 skipped_problems.append(problem_name)
-                continue
-
-            if (os.path.isfile(starter_code)):
-                with open(starter_code, 'r') as f:
-                    starter_code = f.read()
-            else:
-                starter_code = ""
-
-            # Read the question description
-            with open(question_fname, 'r') as f:
-                question_str = f.read()
-
-            # Read all the solutions
-            with open(sols_fname, 'r') as f:
-                sols_str_list = json.load(f)
-                for sol_str in sols_str_list:
-                    sol_str = reindent_code(sol_str)
-                    sample = (question_str, starter_code, sol_str, answer_type)
-                    
-                    all_samples.append(sample)
-                    if question_str in all_samples_dict:
-                        all_samples_dict[question_str].append(sample)
-                    else:
-                        all_samples_dict[question_str] = [sample]
         
-        print(f"Loaded {len(all_samples)} saamples from {self.dataroot}.")
+        print(f"Loaded {len(all_samples)} samples from {self.dataroot}.")
         print(f"Skipped {len(skipped_problems)} problems from {self.dataroot}.")
         self.samples = all_samples
         self.samples_dict = all_samples_dict
@@ -144,7 +202,7 @@ class APPSBaseDataset(torch.utils.data.Dataset):
             curr_num_tokens += len(self.tokenizer.tokenize(curr_s))
             curr_num_tokens += len(self.tokenizer.tokenize(curr_a))
 
-            curr_samples.append((curr_q, curr_s, curr_a, curr_q_prefix))
+            curr_samples.append(Sample(curr_q, curr_s, curr_a, curr_q_prefix))
 
             if self.sample_mode == 'uniform_sol':
                 curr_q, curr_s, curr_a, curr_q_prefix = random.choice(self.samples)
@@ -160,17 +218,12 @@ class APPSBaseDataset(torch.utils.data.Dataset):
         
         raw_samples = self.pack_samples(idx)
 
-        if 'gpt' in self.mode:
+        if 'gpt' in self.mode or self.mode in {'codebert'} or 'facebook' in self.mode:
             retval = sample_gpt_task(
                 raw_samples,
                 max_tokens=self.max_tokens, 
                 tokenizer=self.tokenizer, 
-            )
-        elif self.mode in {'codebert'}:
-            retval = sample_gpt_task(
-                raw_samples,
-                max_tokens=self.max_tokens, 
-                tokenizer=self.tokenizer, 
+                notebook_formatting='facebook' in self.mode
             )
         else:
             raise NotImplementedError()
@@ -178,7 +231,7 @@ class APPSBaseDataset(torch.utils.data.Dataset):
         gc.collect()
         return retval
 
-def sample_gpt_task(raw_samples, max_tokens, tokenizer):
+def sample_gpt_task(raw_samples: List[Sample], max_tokens, tokenizer, notebook_formatting=False):
     """
     Create the true sample used for the GPT task
     """
@@ -186,63 +239,48 @@ def sample_gpt_task(raw_samples, max_tokens, tokenizer):
     input_ids = []
     label_ids = []
     
-    for q_str, s_str, a_str, answer_type in raw_samples:
-        
+    for sample in raw_samples:
+        prompt = APPSBaseDataset.prompt_from_sample(sample, notebook_formatting)
+
         # Loss is not calculated on this
-        q_str =  "\nQUESTION:\n" + q_str + "\n" + s_str + "\n" + answer_type + "\nANSWER:\n"
+        logging.debug("--prompt--")
+        logging.debug(prompt)
+        logging.debug("--sol_str--")
+        logging.debug(sample.sol_str)
+        prompt_token_ids = tokenizer.encode(prompt, verbose=False)
+        answer_token_ids   = tokenizer.encode(sample.sol_str, verbose=False)
 
-        question_token_ids = tokenizer.encode(q_str, verbose=False)
-        answer_token_ids   = tokenizer.encode(a_str, verbose=False)
-        answer_token_ids.append(tokenizer.eos_token_id)
-
-        input_ids.extend(question_token_ids)
+        input_ids.extend(prompt_token_ids)
         input_ids.extend(answer_token_ids)
         
-        label_ids.extend([-100] * len(question_token_ids))
+        label_ids.extend([-100] * len(prompt_token_ids))
         label_ids.extend(answer_token_ids)
+        if notebook_formatting:
+            closing_ids = tokenizer.encode("\n<code>\n", verbose=False)
+            assert None not in closing_ids, closing_ids
+            input_ids.extend(closing_ids)
+            label_ids.extend([-100] * len(closing_ids))
+
+        input_ids.append(tokenizer.bos_token_id if tokenizer.eos_token_id is None else tokenizer.eos_token_id)
+        label_ids.append(-100)
     
     # Sanity check
     assert len(input_ids) == len(label_ids)
 
     if len(input_ids) < max_tokens:
-        print(len(input_ids))
+        print("short doc:", len(input_ids))
         import pdb; pdb.set_trace()
 
     # Cut off the excess
     input_ids = input_ids[:max_tokens]
     label_ids = label_ids[:max_tokens]
 
+    assert None not in input_ids, input_ids
+
     return {
         "input_ids" : torch.LongTensor(input_ids),
         "labels" :  torch.LongTensor(label_ids)
     }
-
-
-def reindent_code(codestr):
-    """
-    Given code string, reindent it in the same way that the
-    Github dataset was indented
-    """
-    codestr = io.StringIO(codestr)
-    ret = io.StringIO()
-
-    run_reindent(
-        codestr, 
-        ret, 
-        config = {
-            "dry-run": False,
-            "help": False,
-            "to": 4,
-            "from": -1,
-            "tabs": True,
-            "encoding": "utf-8",
-            "is-tabs": False,
-            "tabsize": 4,
-            "all-tabs": False
-        }
-    )
-
-    return ret.getvalue()
 
 
 if __name__ == '__main__':
