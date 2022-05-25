@@ -38,7 +38,7 @@ class NoCheckpointingFilter(logging.Filter):
     def filter(self, record):
         return 'is incompatible with gradient checkpointing' not in record.getMessage()
 
-def run_training(args, train_data):
+def run_training(args, train_data, valid_data):
 
     ## Checkpoint Loading ######################################################## 
     if args.load:
@@ -80,10 +80,8 @@ def run_training(args, train_data):
         overwrite_output_dir=False,
 
         do_train=True,
-        do_eval=False,
+        do_eval=valid_data is not None,
         do_predict=True,
-        evaluation_strategy='no',
-        eval_steps=0, 
 
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size_per_replica,
@@ -98,7 +96,8 @@ def run_training(args, train_data):
         logging_first_step=True,
         logging_steps=args.log_freq,
         save_steps=args.save_freq,
-        save_total_limit=2,
+        eval_steps=args.save_freq,
+        save_total_limit=None,
 
         dataloader_drop_last=True,
         dataloader_num_workers=3,
@@ -108,13 +107,17 @@ def run_training(args, train_data):
         deepspeed=args.deepspeed,
         fp16=args.fp16,
         gradient_checkpointing=args.gradient_checkpointing,
+        evaluation_strategy="steps" if valid_data is not None else "no",
     )
 
     trainer = transformers.Trainer(
         model=model,
         args=training_args,
         train_dataset=train_data,
+        eval_dataset=valid_data,
     )
+    # print(f"is_model_parallel: {trainer.is_model_parallel}")
+
     trainer.remove_callback(transformers.integrations.TensorBoardCallback)
     trainer.add_callback(CustomTensorBoardCallback())
 
@@ -127,16 +130,42 @@ def run_training(args, train_data):
 def get_dataset(args): 
     
     fnames = os.listdir(args.apps_train_files)
+
+    if args.frac_valid_data is not None:
+        import random
+        fnames = list(sorted(fnames))
+        random.seed(1)
+        random.shuffle(fnames)
+        n_valid = int(len(fnames) * args.frac_valid_data)
+        valid_fnames = fnames[-n_valid:]
+        train_fnames = fnames[:-n_valid]
+        assert not (set(valid_fnames) & set(train_fnames))
+        print(f"{len(train_fnames)} train instances and {len(valid_fnames)} validation instances")
+    else:
+        train_fnames = fnames
+        valid_fnames = []
+
+    max_tokens = 2048 if ('EleutherAI' in args.arch or 'facebook' in args.arch or '2700' in args.load) else 1024
  
     train_data = APPSBaseDataset(
         dataroot=args.apps_dataroot, 
-        problem_dirs=fnames,
+        problem_dirs=train_fnames,
         mode=args.arch, 
-        max_tokens=2048 if ('EleutherAI' in args.arch or 'facebook' in args.arch or '2700' in args.load) else 1024,
-        sample_mode=args.apps_sample_mode
+        max_tokens=max_tokens,
+        sample_mode=args.apps_sample_mode,
     )
+    if valid_fnames:
+        valid_data = APPSBaseDataset(
+            dataroot=args.apps_dataroot, 
+            problem_dirs=valid_fnames,
+            mode=args.arch, 
+            max_tokens=max_tokens,
+            sample_mode=args.apps_sample_mode,
+        )
+    else:
+        valid_data = None
 
-    return train_data
+    return train_data, valid_data
 
 def main(args):
 
@@ -145,13 +174,13 @@ def main(args):
 
     os.makedirs(args.save_dir, exist_ok=True)
     
-    train_data = get_dataset(args)
+    train_data, valid_data = get_dataset(args)
 
     # Save command to file
     with open(os.path.join(args.save_dir, "command.txt"), 'w') as f:
         f.write(pprint.pformat(argsdict))
 
-    run_training(args, train_data)
+    run_training(args, train_data, valid_data)
 
 
 if __name__ == "__main__":
@@ -185,6 +214,8 @@ if __name__ == "__main__":
     parser.add_argument('--deepspeed', default=None, type=str)
     parser.add_argument('--fp16', default=False, action='store_true')
     parser.add_argument('--gradient-checkpointing', default=False, action='store_true')
+
+    parser.add_argument('--frac-valid-data', type=float, default=0.05)
 
     # Logging and stuff
     parser.add_argument('--save-dir', default="checkpoints/TEMP", type=str)
