@@ -11,7 +11,7 @@ else
   shift
 fi
 
-save_dir="expts/${name}"
+save_dir="/checkpoint/dpf/apps/expts/${name}"
 
 mkdir $save_dir
 
@@ -23,9 +23,9 @@ USE_TF=NO deepspeed tune_apps_gpt.py  \
   --apps-dataroot ../data/train/ \
   --grad-acc-steps=4 \
   --batch-size-per-replica=8 \
-  --epochs=10 \
   --fp16 \
   --deepspeed deepspeed_config.json \
   --gradient-checkpointing \
+  --eval-freq 50 \
   $@ \
   | tee ${save_dir}/log.out

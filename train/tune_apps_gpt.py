@@ -147,26 +147,29 @@ def run_training(args):
         prediction_loss_only=False,
 
         learning_rate=args.lr,
-        weight_decay=0.05,
+        weight_decay=args.weight_decay,
         warmup_steps=args.lr_warmup_steps,
         # max_grad_norm=1.0,
 
         logging_dir=args.save_dir, 
         logging_first_step=True,
         logging_steps=args.log_freq,
-        save_steps=args.save_freq,
-        eval_steps=args.save_freq,
-        save_total_limit=None,
+        eval_steps=args.eval_freq,
+
+        save_steps=args.save_freq or args.eval_freq,
+        evaluation_strategy="steps" if valid_data is not None else "no",
+        save_total_limit=args.save_total_limit,
+        load_best_model_at_end=True,
 
         dataloader_drop_last=True,
-        dataloader_num_workers=0,
+        dataloader_num_workers=4,
 
         local_rank=args.local_rank,
 
         deepspeed=args.deepspeed,
         fp16=args.fp16,
         gradient_checkpointing=args.gradient_checkpointing,
-        evaluation_strategy="steps" if valid_data is not None else "no",
+
     )
 
     def preprocess_logits_for_metrics(logits, labels):
@@ -284,8 +287,9 @@ if __name__ == "__main__":
     parser.add_argument('--apps-sample-mode', choices=['uniform_sol', 'uniform_prob', 'example_only'], default='uniform_sol')
     
     # Training
-    parser.add_argument('--epochs', default=10, type=int)
+    parser.add_argument('--epochs', default=5, type=int)
     parser.add_argument('--lr', default=5e-5, type=float)
+    parser.add_argument('--weight-decay', default=0.05, type=float)
     parser.add_argument('--lr-warmup-steps', default=0, type=int)
     parser.add_argument('--batch-size-per-replica', default=8, type=int)
     parser.add_argument('--grad-acc-steps', default=4, type=int)
@@ -299,7 +303,9 @@ if __name__ == "__main__":
     # Logging and stuff
     parser.add_argument('--save-dir', default="checkpoints/TEMP", type=str)
     parser.add_argument('--log-freq', default=5, type=int)
-    parser.add_argument('--save-freq', default=200, type=int)
+    parser.add_argument('--eval-freq', default=100, type=int)
+    parser.add_argument('--save-freq', type=int, help='will be set to eval-freq if not passed')
+    parser.add_argument('--save-total-limit', type=int)
 
     args = parser.parse_args()
 
