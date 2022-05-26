@@ -56,7 +56,7 @@ def reindent_code(codestr):
     return ret.getvalue()
 
 class APPSBaseDataset(torch.utils.data.Dataset):
-    def __init__(self, dataroot, problem_dirs, mode, max_tokens, sample_mode):
+    def __init__(self, dataroot, problem_dirs, mode, max_tokens, sample_mode, tokenizer):
         self.dataroot = dataroot
         self.problem_dirs = problem_dirs # Loaded from train/test split json files
 
@@ -67,16 +67,7 @@ class APPSBaseDataset(torch.utils.data.Dataset):
         self.samples = []           # Should be set in initialize()
         self.initialize()
 
-        if ('EleutherAI' in mode or '2700' in mode):
-            self.tokenizer = transformers.GPT2Tokenizer.from_pretrained("EleutherAI/gpt-neo-2.7B")
-        elif 'facebook' in mode:
-            self.tokenizer = transformers.AutoTokenizer.from_pretrained("facebook/incoder-1B")
-        elif 'gpt' in self.mode: # Should handle GPT-2 and GPT-Neo
-            self.tokenizer = transformers.GPT2Tokenizer.from_pretrained(mode)
-        elif self.mode in {'codebert'}:
-            self.tokenizer = transformers.RobertaTokenizer.from_pretrained("microsoft/codebert-base")
-        else:
-            raise NotImplementedError()
+        self.tokenizer = tokenizer
 
     @staticmethod
     def load_samples(dataroot, problem_name):
@@ -183,6 +174,8 @@ class APPSBaseDataset(torch.utils.data.Dataset):
         elif self.sample_mode == 'uniform_prob':
             curr_q = random.choice(list(self.samples_dict.keys()))
             curr_q, curr_s, curr_a, curr_q_prefix = random.choice(self.samples_dict[curr_q])
+        elif self.sample_mode == 'example_only':
+            return [self.samples[idx]]
         else:
             raise NotImplementedError()
 
@@ -239,7 +232,7 @@ def sample_gpt_task(raw_samples: List[Sample], max_tokens, tokenizer, notebook_f
     input_ids = []
     label_ids = []
     
-    for sample in raw_samples:
+    for sample_ix, sample in enumerate(raw_samples):
         prompt = APPSBaseDataset.prompt_from_sample(sample, notebook_formatting)
 
         # Loss is not calculated on this
@@ -247,8 +240,12 @@ def sample_gpt_task(raw_samples: List[Sample], max_tokens, tokenizer, notebook_f
         logging.debug(prompt)
         logging.debug("--sol_str--")
         logging.debug(sample.sol_str)
-        prompt_token_ids = tokenizer.encode(prompt, verbose=False)
-        answer_token_ids   = tokenizer.encode(sample.sol_str, verbose=False)
+
+        # incoder tokenizer (and fairseq-imported models generally) add a BOS
+        # token, which we *do* want at the beginning of the document, but not
+        # elsewhere
+        prompt_token_ids = tokenizer.encode(prompt, verbose=False, add_special_tokens=sample_ix == 0)
+        answer_token_ids   = tokenizer.encode(sample.sol_str, verbose=False, add_special_tokens=False)
 
         input_ids.extend(prompt_token_ids)
         input_ids.extend(answer_token_ids)
@@ -256,7 +253,7 @@ def sample_gpt_task(raw_samples: List[Sample], max_tokens, tokenizer, notebook_f
         label_ids.extend([-100] * len(prompt_token_ids))
         label_ids.extend(answer_token_ids)
         if notebook_formatting:
-            closing_ids = tokenizer.encode("\n<code>\n", verbose=False)
+            closing_ids = tokenizer.encode("\n<code>\n", verbose=False, add_special_tokens=False)
             assert None not in closing_ids, closing_ids
             input_ids.extend(closing_ids)
             label_ids.extend([-100] * len(closing_ids))
@@ -268,8 +265,9 @@ def sample_gpt_task(raw_samples: List[Sample], max_tokens, tokenizer, notebook_f
     assert len(input_ids) == len(label_ids)
 
     if len(input_ids) < max_tokens:
-        print("short doc:", len(input_ids))
-        import pdb; pdb.set_trace()
+        pass
+        # print("short doc:", len(input_ids))
+        # import pdb; pdb.set_trace()
 
     # Cut off the excess
     input_ids = input_ids[:max_tokens]
