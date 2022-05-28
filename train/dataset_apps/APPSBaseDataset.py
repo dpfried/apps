@@ -70,7 +70,7 @@ class APPSBaseDataset(torch.utils.data.Dataset):
         self.tokenizer = tokenizer
 
     @staticmethod
-    def load_samples(dataroot, problem_name):
+    def load_samples(dataroot, problem_name, require_solutions=True) -> List[Sample]:
         test_case_path = os.path.join(dataroot, problem_name, "input_output.json")
         question_fname = os.path.join(dataroot, problem_name, "question.txt")
         sols_fname = os.path.join(dataroot, problem_name, "solutions.json")
@@ -87,7 +87,7 @@ class APPSBaseDataset(torch.utils.data.Dataset):
             answer_type = "\nUse Standard Input format\n"
             # assert not bool(test_data.get("fn_name"))
 
-        if (not os.path.isfile(question_fname)) or (not os.path.isfile(sols_fname)):
+        if (not os.path.isfile(question_fname)):
             return None
 
         if (os.path.isfile(starter_code)):
@@ -100,15 +100,19 @@ class APPSBaseDataset(torch.utils.data.Dataset):
         with open(question_fname, 'r') as f:
             question_str = f.read()
 
-        samples = []
+        if not os.path.isfile(sols_fname):
+            if require_solutions:
+                return None
+            sol_str_list = ['']
+        else:
+            with open(sols_fname, 'r') as f:
+                sols_str_list = [reindent_code(sol_str) for sol_str in json.load(f)]
 
+        samples = []
         # Read all the solutions
-        with open(sols_fname, 'r') as f:
-            sols_str_list = json.load(f)
-            for sol_str in sols_str_list:
-                sol_str = reindent_code(sol_str)
-                sample = Sample(question_str, starter_code, sol_str, answer_type)
-                samples.append(sample)
+        for sol_str in sols_str_list:
+            sample = Sample(question_str, starter_code, sol_str, answer_type)
+            samples.append(sample)
         return samples
 
     @staticmethod

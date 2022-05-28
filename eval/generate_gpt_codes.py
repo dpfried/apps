@@ -17,6 +17,10 @@ import torch
 
 from reindent import run as run_reindent
 
+import sys
+sys.path.append("../train")
+from dataset_apps.APPSBaseDataset import APPSBaseDataset
+
 # for timing and debugging
 from datetime import datetime, date
 from tqdm import tqdm
@@ -77,77 +81,6 @@ def truncate_at_stop_words(tokenizer, stop_words, sequence_ids, logprobs=None, s
         seq = sequence_ids
         seq_decoded = full_seq_decoded
     return seq, seq_decoded, logprobs
-
-def generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer, starter_path=None, notebook_formatting=False, notebook_beginning=False):
-    if notebook_formatting:
-        if notebook_beginning:
-            _input = "<| file ext=.ipynb:python |>\n"
-        else:
-            _input = ""
-        _input += "<text>\n"
-    else:
-        _input = "\nQUESTION:\n"
-    
-    with open(prompt_path, "r") as f:
-        data = f.readlines()
-        data = "".join(data)
-    _input += data
-    if starter_path != None:
-        with open(starter_path, "r") as f:
-            data = f.readlines()
-            data = "".join(data)
-            data = "\n" + data #+ "\n"
-        _input += data
-    else:
-        #_input += "\n\n"
-        pass
-
-    with open(test_case_path, "r") as f:
-        data = json.load(f)
-    if not data.get("fn_name"):
-        # _input += "\nUse Standard Input format"#\n"
-        _input += "\nUse Standard Input format\n"
-    else:
-        # _input += "\nUse Call-Based format"#\n"
-        _input += "\nUse Call-Based format\n"
-    
-    if notebook_formatting:
-        _input += "\n</text>\n<cell>\n"
-    else:
-        _input += "\nANSWER:\n"
-
-    with open(solutions_path, 'r') as f:
-        sols = json.load(f)
-
-    reindented_sols = [reindent_code(sol) for sol in sols]
-
-    short_sol = min(reindented_sols, key=len)
-
-    if args.peeking > 0.0:
-        # Need to do some peeking. 
-
-        # Read one example solution
-        # Choose the shortest solution for the model to use.
-        # This is so we can conserve tokens (1024 max)
-        # sample_sol = min(sols, key=len)
-
-        # # Add args.peeking% of that solution to the prompt
-        # sample_sol_token_ids = tokenizer.encode(sample_sol, verbose=False)
-        # num_to_keep = int(len(sample_sol_token_ids) * args.peeking)
-        # sample_sol_token_ids = sample_sol_token_ids[:num_to_keep]
-        # _input += tokenizer.decode(sample_sol_token_ids)
-
-        # Alternatively take a random solution
-        sample_sol = rand_sol = random.choice(reindented_sols)
-        rand_sol = tokenizer.encode(rand_sol, verbose=False)
-        tokens_taken = int(args.peek_frac * len(rand_sol))
-        rand_sol = rand_sol[:tokens_taken]
-        _input += tokenizer.decode(rand_sol)
-    else:
-        sample_sol = None
-
-    return _input, sample_sol, short_sol
-
 
 def main(args):
 
@@ -214,19 +147,22 @@ def main(args):
     model.cuda()
     print(f"Loaded {args.arch}: {args.load or ''}.")
 
-    def generate_prompt_from_path(prob_path):
-        test_case_path = os.path.join(prob_path, "input_output.json")
-        prompt_path = os.path.join(prob_path, "question.txt")
-        starter_path = os.path.join(prob_path, "starter_code.py")
-        solutions_path = os.path.join(prob_path, "solutions.json")
-
-        if not os.path.exists(starter_path):
-            starter_path = None
-        if not os.path.exists(test_case_path) or not os.path.exists(prompt_path):
+    def generate_prompt_from_path(dataroot, problem_name):
+        samples = APPSBaseDataset.load_samples(dataroot, problem_name, require_solutions=False)
+        if samples is None:
             return None, None, None
+        short_sol = min(samples, key=lambda sample:len(sample.sol_str))
+        sample_sol = random.choice(samples).sol_str
+        prompt_text = APPSBaseDataset.prompt_from_sample(samples[0], notebook_formatting=notebook_formatting)
 
-        # Read the question in
-        prompt_text, sample_sol, short_sol = generate_prompt(args, test_case_path, prompt_path, solutions_path, tokenizer, starter_path, notebook_formatting=notebook_formatting)
+        # peek at part of the solution
+        if args.peeking > 0.0:
+            rand_sol = random.choice(samples).sol_str
+            rand_sol = tokenizer.encode(rand_sol, verbose=False)
+            tokens_taken = int(args.peek_frac * len(rand_sol))
+            rand_sol = rand_sol[:tokens_taken]
+            prompt_text += tokenizer.decode(rand_sol)
+
         return prompt_text, sample_sol, short_sol
 
     if args.k_shot_prompts > 0:
@@ -234,7 +170,7 @@ def main(args):
         k_shot_prompts = []
         for path in train_problems:
             prob_path = os.path.join(args.root, path)
-            prompt_text, sample_sol, short_sol = generate_prompt_from_path(prob_path)
+            prompt_text, sample_sol, short_sol = generate_prompt_from_path(args.root, path)
             if prompt_text is None:
                 continue
             this_prompt = prompt_text + short_sol
@@ -255,7 +191,7 @@ def main(args):
         prob_path = os.path.join(args.root, problem)
         if args.debug:
             print(f"problem path = {prob_path}")
-        prompt_text, sample_sol, short_sol = generate_prompt_from_path(prob_path)
+        prompt_text, sample_sol, short_sol = generate_prompt_from_path(args.root, problem)
         if prompt_text is None:
             continue
 

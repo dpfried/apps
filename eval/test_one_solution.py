@@ -28,6 +28,7 @@ def print_results(results, args):
         assert len(this_results) == 1
         this_results = this_results[0]
         res.extend(this_results)
+        assert len(this_results) > 0, f"no results found for index {index}"
         this_results = np.array(this_results)
         this_results[this_results < 0] = 0
         per_prob_res.append(np.mean(this_results))
@@ -57,13 +58,11 @@ def eval_and_save_problems(args):
     gpt_codebleu = {}
     results = {}
     codes_loc = os.path.join(args.save, f"all_codes.json")
+    results_loc = os.path.join(args.save, f"all_results.json") 
     if not os.path.exists(codes_loc):
         codes_loc = os.path.join(args.save, f"{args.start}-{args.end}_codes.json")
-
-    if os.path.exists(codes_loc):
-        results_loc = os.path.join(args.save, f"all_results.json") 
-    else:
         results_loc = os.path.join(args.save, f"{args.start}-{args.end}_results.json") 
+
     print(codes_loc, results_loc)
 
     with open(codes_loc, "r") as f: 
@@ -172,6 +171,9 @@ def main(args):
 
 if __name__ == "__main__":
     import argparse
+
+    import sys
+    print(' '.join(sys.argv))
 
     parser = argparse.ArgumentParser(description="Testing a Language Model on Python Code")
     parser.add_argument("-t","--test_loc", default="../data_split/test.json", type=str, help="path to the json containing problem paths to be evaluated.")
