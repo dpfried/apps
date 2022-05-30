@@ -305,7 +305,7 @@ if __name__ == "__main__":
     parser.add_argument('--log-freq', default=5, type=int)
     parser.add_argument('--eval-freq', default=100, type=int)
     parser.add_argument('--save-freq', type=int, help='will be set to eval-freq if not passed')
-    parser.add_argument('--save-total-limit', type=int)
+    parser.add_argument('--save-total-limit', type=int, default=2)
 
     args = parser.parse_args()
 
