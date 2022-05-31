@@ -6,6 +6,9 @@ shift
 arch=$1
 shift
 
+shard=$1
+shift
+
 dir="expts/${name}"
 echo $dir
 
@@ -17,7 +20,6 @@ python -u generate_gpt_codes.py \
   --arch $arch \
   --save ${dir} \
   -d \
-  --start 0 \
-  --end 1000 \
+  --shard ${shard} \
   $@ \
-  | tee ${dir}.out
+  | tee ${dir}/shard-${shard}.out

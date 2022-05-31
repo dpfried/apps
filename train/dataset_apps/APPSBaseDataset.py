@@ -103,7 +103,7 @@ class APPSBaseDataset(torch.utils.data.Dataset):
         if not os.path.isfile(sols_fname):
             if require_solutions:
                 return None
-            sol_str_list = ['']
+            sols_str_list = ['']
         else:
             with open(sols_fname, 'r') as f:
                 sols_str_list = [reindent_code(sol_str) for sol_str in json.load(f)]

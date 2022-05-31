@@ -97,6 +97,18 @@ def main(args):
     gpt_codes = {}
     if not os.path.exists(args.save):
         os.makedirs(args.save, exist_ok=True)
+    
+    if args.shard is not None:
+        assert 0 <= args.shard < args.num_shards
+        shard_size = int(math.ceil(len(problems) / args.num_shards))
+        start = shard_size * args.shard
+        end = shard_size * (args.shard + 1)
+        if args.shard == args.num_shards - 1:
+            assert end == len(problems)
+        args.start = start
+        args.end = end
+        print(f"shard {args.shard}: [{args.start}, {args.end})")
+
     if not args.end:
         codes_loc = os.path.join(args.save, f"all_codes.json")
     else:
@@ -205,9 +217,12 @@ def main(args):
         # Feed this into the model.
         start = time.time()
         try:
+        # if True:
             with torch.no_grad():
                 # input_ids = torch.LongTensor(tokenizer.encode(prompt_text, verbose=False)).unsqueeze(0).cuda()
                 input_ids = tokenizer.encode(prompt_text, return_tensors='pt').cuda()
+                if input_ids.size(-1) >= MAX_LENGTH:
+                    raise ValueError(f"input {problem} is too long; skipping")
                 output_ids = model.generate(
                     input_ids,
                     #num_beams=args.num_beams,
@@ -263,6 +278,9 @@ def main(args):
 if __name__ == "__main__":
     import argparse
 
+    import sys
+    print(' '.join(sys.argv))
+
     MODEL_ARCHS = transformers.GPT2_PRETRAINED_MODEL_ARCHIVE_LIST + [
         "facebook/incoder-6B",
         "facebook/incoder-1B",
@@ -278,6 +296,8 @@ if __name__ == "__main__":
     parser.add_argument("--num-beams", default=5, type=int)
     parser.add_argument("-s","--start", default=0, type=int)
     parser.add_argument("-e","--end", default=None, type=int)
+    parser.add_argument("--shard", default=None, type=int)
+    parser.add_argument("--num_shards", default=10, type=int)
     parser.add_argument("-i", "--index", default=None, type=int)
     parser.add_argument("-d", "--debug", action="store_true")
     parser.add_argument("--save", type=str, default="./results")
