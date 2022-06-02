@@ -5,6 +5,8 @@ import sys
 import io
 import faulthandler
 
+from collections import namedtuple
+
 # used for debugging to time steps
 from datetime import datetime
 
@@ -22,6 +24,9 @@ from unittest.mock import patch, mock_open
 from pyext import RuntimeModule
 
 from enum import Enum
+
+TestResults = namedtuple("TestResults", ["num_tests", "test_results", "error"])
+
 class CODE_TYPE(Enum):
     call_based = 0
     standard_input = 1
@@ -149,13 +154,14 @@ def run_test(prob_path:str=None, problem_list:List[str]=None, prob_index:int=Non
                 method_name = in_outs["fn_name"]
     if debug:
         print(f"loaded json = {datetime.now().time()}")
+
+    num_tests = len(in_outs["inputs"])
  
     #else:
     #    continue
     if test is None:
-        return in_outs
+        return TestResults(num_tests, test_results=[], error="test is None")
     elif test is not None:
-        results = []
         sol = "import sys\nimport time\nimport itertools\nfrom itertools import accumulate, product, permutations, combinations\nimport collections\nfrom collections import Counter, OrderedDict, deque, defaultdict, ChainMap\nfrom functools import lru_cache\nimport math\nfrom math import sqrt, sin, cos, tan, ceil, fabs, floor, gcd, exp, log, log2\nimport fractions\nfrom typing import List, Tuple\nimport numpy as np\nimport random\nimport heapq\nfrom heapq import *\n"
         if debug:
             print(f"loading test code = {datetime.now().time()}")
@@ -175,8 +181,8 @@ def run_test(prob_path:str=None, problem_list:List[str]=None, prob_index:int=Non
             except Exception as e:
                 signal.alarm(0)
                 print(f"type 0 compilation error = {e}")
-                results.append(-2)
-                return results
+                # results.append(-2)
+                return TestResults(num_tests, test_results=[], error=-2)
             signal.alarm(0)
 
         elif which_type == CODE_TYPE.standard_input:
@@ -218,8 +224,9 @@ def run_test(prob_path:str=None, problem_list:List[str]=None, prob_index:int=Non
             except Exception as e:
                 signal.alarm(0)
                 print(f"type 1 compilation error = {e}")
-                results.append(-2)
-                return results
+                # results.append(-2)
+                # return results
+                return TestResults(num_tests, test_results=[], error=-2)
             signal.alarm(0)
         if debug:
             print(f"get method = {datetime.now().time()}")
@@ -230,8 +237,10 @@ def run_test(prob_path:str=None, problem_list:List[str]=None, prob_index:int=Non
             signal.alarm(0)
             e = sys.exc_info()
             print(f"unable to get function error = {e}")
-            return results
+            # results.append(-3)
+            return TestResults(num_tests, test_results=[], error=-3)
 
+        results = []
         for index, inputs in enumerate(in_outs["inputs"]):
             # JSON forces dictionaries to have string keys; this undoes this (assuming a singleton list)
             try:
@@ -272,7 +281,8 @@ def run_test(prob_path:str=None, problem_list:List[str]=None, prob_index:int=Non
                     try:
                         if isinstance(output[0], tuple):
                             tmp_result = tmp_result or ([list(x) for x in output] == in_outs["outputs"][index][0])
-                    except:
+                    except Exception as e:
+                        raise e
                         True
                     results.append(tmp_result)
 
@@ -464,8 +474,7 @@ def run_test(prob_path:str=None, problem_list:List[str]=None, prob_index:int=Non
                     else:
                         print(f"output = {output}, test outputs = {in_outs['outputs'][index]}, inputs = {inputs}, {type(inputs)}, {output == [in_outs['outputs'][index]]}") 
 
-
-    return results
+    return TestResults(num_tests, test_results=results, error=None)
 
 def custom_compare_(output, ground_truth):
     
