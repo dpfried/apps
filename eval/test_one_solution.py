@@ -146,9 +146,6 @@ def eval_and_save_problems(args):
             continue
         prob_path = os.path.join(args.root, problem)
 
-        if index > 10:
-            break
-
         # with open(os.path.join(prob_path, "solutions.json"), "r") as f:
         #     sols = json.load(f)
         
