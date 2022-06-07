@@ -29,7 +29,7 @@ import torch.multiprocessing as mp
 from torch.nn import CrossEntropyLoss
 
 from dataset_lm.base_lm_dataset import BaseLMDataset
-from dataset_apps.APPSBaseDataset import APPSBaseDataset
+from dataset_apps.APPSBaseDataset import APPSBaseDataset, FORMATTING_TYPES
 from CustomTensorboardCallback import CustomTensorBoardCallback
 
 BIG_NEG = torch.tensor(-1.0e9)
@@ -102,10 +102,13 @@ def run_training(args):
     train_data, valid_data = get_dataset(args, tokenizer)
 
     if args.apps_sample_mode == 'example_only':
-        collator = None
+        # collator = None
         # print("padding out examples")
-        # tokenizer.add_special_tokens({'pad_token': '<|pad|>'})
-        # collator = DataCollatorWithPadding(tokenizer=tokenizer)
+        # tokenizer.pad_token = "<pad>"
+        # tokenizer.padding_side = "left"
+        # max_tokens = get_max_tokens(args)
+        # collator = DataCollatorWithPadding(tokenizer=tokenizer, padding='max_length', max_length=max_tokens)
+        collator = None
     else:
         collator = None
 
@@ -162,7 +165,7 @@ def run_training(args):
         load_best_model_at_end=True,
 
         dataloader_drop_last=True,
-        dataloader_num_workers=4,
+        dataloader_num_workers=args.dataloader_num_workers,
 
         local_rank=args.local_rank,
 
@@ -204,6 +207,10 @@ def run_training(args):
         model.save_pretrained(os.path.join(args.save_dir, "final_checkpoint"))
 
 
+def get_max_tokens(args):
+    max_tokens = 2048 if ('EleutherAI' in args.arch or 'facebook' in args.arch or '2700' in args.load) else 1024
+    return max_tokens
+
 def get_dataset(args, tokenizer): 
     
     fnames = os.listdir(args.apps_train_files)
@@ -222,7 +229,7 @@ def get_dataset(args, tokenizer):
         train_fnames = fnames
         valid_fnames = []
 
-    max_tokens = 2048 if ('EleutherAI' in args.arch or 'facebook' in args.arch or '2700' in args.load) else 1024
+    max_tokens = get_max_tokens(args)
  
     train_data = APPSBaseDataset(
         dataroot=args.apps_dataroot, 
@@ -231,6 +238,8 @@ def get_dataset(args, tokenizer):
         max_tokens=max_tokens,
         sample_mode=args.apps_sample_mode,
         tokenizer=tokenizer,
+        formatting_type=args.formatting_type,
+        reindent_code='facebook' not in args.arch,
     )
     if valid_fnames:
         valid_data = APPSBaseDataset(
@@ -244,6 +253,8 @@ def get_dataset(args, tokenizer):
             sample_mode='example_only',
             # sample_mode=args.apps_sample_mode,
             tokenizer=tokenizer,
+            formatting_type=args.formatting_type,
+            reindent_code='facebook' not in args.arch,
         )
     else:
         valid_data = None
@@ -285,6 +296,7 @@ if __name__ == "__main__":
     parser.add_argument('--apps-dataroot', default='../apps/', type=str)
     parser.add_argument('--apps-train-files', default='../apps/data_split/train.json', type=str)
     parser.add_argument('--apps-sample-mode', choices=['uniform_sol', 'uniform_prob', 'example_only'], default='uniform_sol')
+    parser.add_argument("--formatting-type", choices=FORMATTING_TYPES)
     
     # Training
     parser.add_argument('--epochs', default=5, type=int)
@@ -299,6 +311,7 @@ if __name__ == "__main__":
     parser.add_argument('--gradient-checkpointing', default=False, action='store_true')
 
     parser.add_argument('--frac-valid-data', type=float, default=0.05)
+    parser.add_argument('--dataloader-num-workers', type=int, default=4)
 
     # Logging and stuff
     parser.add_argument('--save-dir', default="checkpoints/TEMP", type=str)

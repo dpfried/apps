@@ -27,7 +27,9 @@ from tqdm import tqdm
 
 import json
 
-Sample = namedtuple("Sample", ["question_str", "starter_code", "sol_str", "answer_type"])
+Sample = namedtuple("Sample", ["question_str", "starter_code", "sol_str", "answer_type", "metadata"])
+
+FORMATTING_TYPES = ["qa", "notebook", "stackoverflow"]
 
 def reindent_code(codestr):
     """
@@ -56,9 +58,13 @@ def reindent_code(codestr):
     return ret.getvalue()
 
 class APPSBaseDataset(torch.utils.data.Dataset):
-    def __init__(self, dataroot, problem_dirs, mode, max_tokens, sample_mode, tokenizer):
+    def __init__(self, dataroot, problem_dirs, mode, max_tokens, sample_mode, tokenizer, formatting_type=None, reindent_code=True):
         self.dataroot = dataroot
         self.problem_dirs = problem_dirs # Loaded from train/test split json files
+        if formatting_type is None:
+            formatting_type = 'notebook' if 'facebook' in self.mode else 'qa'
+        self.formatting_type = formatting_type
+        self.reindent_code = reindent_code
 
         self.mode = mode
         self.sample_mode = sample_mode # Either "uniform_sol" or "uniform_prob"
@@ -70,11 +76,12 @@ class APPSBaseDataset(torch.utils.data.Dataset):
         self.tokenizer = tokenizer
 
     @staticmethod
-    def load_samples(dataroot, problem_name, require_solutions=True) -> List[Sample]:
+    def load_samples(dataroot, problem_name, require_solutions=True, reindent_code=True) -> List[Sample]:
         test_case_path = os.path.join(dataroot, problem_name, "input_output.json")
         question_fname = os.path.join(dataroot, problem_name, "question.txt")
         sols_fname = os.path.join(dataroot, problem_name, "solutions.json")
         starter_code = os.path.join(dataroot, problem_name, "starter_code.py")
+        metadata = os.path.join(dataroot, problem_name, "metadata.json")
 
         # with open(test_case_path, "r") as f:
         #     test_data = json.load(f)
@@ -93,8 +100,16 @@ class APPSBaseDataset(torch.utils.data.Dataset):
         if (os.path.isfile(starter_code)):
             with open(starter_code, 'r') as f:
                 starter_code = f.read()
+            if reindent_code:
+                starter_code = reindent_code(starter_code)
         else:
             starter_code = ""
+
+        if (os.path.isfile(metadata)):
+            with open(metadata, 'r') as f:
+                metadata = json.load(f)
+        else:
+            metadata = None
 
         # Read the question description
         with open(question_fname, 'r') as f:
@@ -106,18 +121,19 @@ class APPSBaseDataset(torch.utils.data.Dataset):
             sols_str_list = ['']
         else:
             with open(sols_fname, 'r') as f:
-                sols_str_list = [reindent_code(sol_str) for sol_str in json.load(f)]
+                sols_str_list = [reindent_code(sol_str) if reindent_code else sol_str for sol_str in json.load(f)]
 
         samples = []
         # Read all the solutions
         for sol_str in sols_str_list:
-            sample = Sample(question_str, starter_code, sol_str, answer_type)
+            sample = Sample(question_str, starter_code, sol_str, answer_type, metadata=metadata)
             samples.append(sample)
         return samples
 
     @staticmethod
-    def prompt_from_sample(sample: Sample, notebook_formatting: bool):
-        if notebook_formatting:
+    def prompt_from_sample(sample: Sample, formatting_type = "qa"):
+        assert formatting_type in FORMATTING_TYPES
+        if formatting_type == "notebook":
             prompt = "<text>\n" + sample.question_str 
             if sample.starter_code:
                 prompt += "\n</text>\n<code>\n"
@@ -126,8 +142,30 @@ class APPSBaseDataset(torch.utils.data.Dataset):
             prompt += "\n" + sample.answer_type
             prompt += "\n</text>\n"
             prompt += "\n<cell>\n"
-        else:
+        elif formatting_type == "stackoverflow":
+            prompt = "<| q dscore=3 tags=python >\n" + sample.question_str 
+            prompt += "\n" + sample.answer_type
+            if sample.starter_code:
+                # sol_str_tok = sample.sol_str.split()
+                # starter_code_tok = sample.starter_code.split()
+                # if not sol_str_tok[:len(starter_code_tok)] == starter_code_tok:
+                #     print("starter_code")
+                #     print(sample.starter_code)
+                #     print("sol_str")
+                #     print(sample.sol_str)
+                #     assert False
+                prompt += "\n<code>\n"
+                prompt += sample.starter_code
+                prompt += "\n</code>"
+            prompt += "\n<|/ q |>\n<| a dscore=3 tags=python |>\n"
+            prompt += "<code>\n"
+            # print(prompt)
+            # print("solution:")
+            # print(sample.sol_str)
+        elif formatting_type == "qa":
             prompt =  "\nQUESTION:\n" + sample.question_str + "\n" + sample.starter_code + "\n" + sample.answer_type + "\nANSWER:\n"
+        else:
+            raise NotImplementedError(f"invalid formatting_type {formatting_type}")
         return prompt
 
     def initialize(self):
@@ -142,7 +180,7 @@ class APPSBaseDataset(torch.utils.data.Dataset):
 
         print(f"Loading {len(self.problem_dirs)} problems from {self.dataroot}.")
         for problem_name in tqdm(self.problem_dirs):
-            samples = self.load_samples(self.dataroot, problem_name)
+            samples = self.load_samples(self.dataroot, problem_name, reindent_code=self.reindent_code)
             if samples is not None:
                 all_samples.extend(samples)
                 question_str = samples[0][0]
@@ -174,10 +212,10 @@ class APPSBaseDataset(torch.utils.data.Dataset):
         curr_samples = [] 
 
         if self.sample_mode == 'uniform_sol':
-            curr_q, curr_s, curr_a, curr_q_prefix = self.samples[idx]
+            curr_q, curr_s, curr_a, curr_q_prefix, curr_q_meta = self.samples[idx]
         elif self.sample_mode == 'uniform_prob':
             curr_q = random.choice(list(self.samples_dict.keys()))
-            curr_q, curr_s, curr_a, curr_q_prefix = random.choice(self.samples_dict[curr_q])
+            curr_q, curr_s, curr_a, curr_q_prefix, curr_q_meta = random.choice(self.samples_dict[curr_q])
         elif self.sample_mode == 'example_only':
             return [self.samples[idx]]
         else:
@@ -199,13 +237,13 @@ class APPSBaseDataset(torch.utils.data.Dataset):
             curr_num_tokens += len(self.tokenizer.tokenize(curr_s))
             curr_num_tokens += len(self.tokenizer.tokenize(curr_a))
 
-            curr_samples.append(Sample(curr_q, curr_s, curr_a, curr_q_prefix))
+            curr_samples.append(Sample(curr_q, curr_s, curr_a, curr_q_prefix, metadata=curr_q_meta))
 
             if self.sample_mode == 'uniform_sol':
-                curr_q, curr_s, curr_a, curr_q_prefix = random.choice(self.samples)
+                curr_q, curr_s, curr_a, curr_q_prefix, curr_q_meta = random.choice(self.samples)
             elif self.sample_mode == 'uniform_prob':
                 curr_q = random.choice(list(self.samples_dict.keys()))
-                curr_q, curr_s, curr_a, curr_q_prefix = random.choice(self.samples_dict[curr_q])
+                curr_q, curr_s, curr_a, curr_q_prefix, curr_q_meta = random.choice(self.samples_dict[curr_q])
             else:
                 raise NotImplementedError()
 
@@ -220,7 +258,7 @@ class APPSBaseDataset(torch.utils.data.Dataset):
                 raw_samples,
                 max_tokens=self.max_tokens, 
                 tokenizer=self.tokenizer, 
-                notebook_formatting='facebook' in self.mode
+                formatting_type=self.formatting_type
             )
         else:
             raise NotImplementedError()
@@ -228,7 +266,7 @@ class APPSBaseDataset(torch.utils.data.Dataset):
         gc.collect()
         return retval
 
-def sample_gpt_task(raw_samples: List[Sample], max_tokens, tokenizer, notebook_formatting=False):
+def sample_gpt_task(raw_samples: List[Sample], max_tokens, tokenizer, formatting_type:str = "qa"):
     """
     Create the true sample used for the GPT task
     """
@@ -237,7 +275,7 @@ def sample_gpt_task(raw_samples: List[Sample], max_tokens, tokenizer, notebook_f
     label_ids = []
     
     for sample_ix, sample in enumerate(raw_samples):
-        prompt = APPSBaseDataset.prompt_from_sample(sample, notebook_formatting)
+        prompt = APPSBaseDataset.prompt_from_sample(sample, formatting_type)
 
         # Loss is not calculated on this
         logging.debug("--prompt--")
@@ -256,8 +294,12 @@ def sample_gpt_task(raw_samples: List[Sample], max_tokens, tokenizer, notebook_f
         
         label_ids.extend([-100] * len(prompt_token_ids))
         label_ids.extend(answer_token_ids)
-        if notebook_formatting:
-            closing_ids = tokenizer.encode("\n<code>\n", verbose=False, add_special_tokens=False)
+        if formatting_type in ["notebook", "stackoverflow"]:
+            if formatting_type == "notebook":
+                # TODO fix this so it's a closing tag
+                closing_ids = tokenizer.encode("\n<code>\n", verbose=False, add_special_tokens=False)
+            else:
+                closing_ids = tokenizer.encode("\n<|/ a |>\n", verbose=False, add_special_tokens=False)
             assert None not in closing_ids, closing_ids
             input_ids.extend(closing_ids)
             label_ids.extend([-100] * len(closing_ids))

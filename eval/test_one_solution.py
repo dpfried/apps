@@ -45,9 +45,11 @@ def print_results(results, args):
             # this_results.test_results contains True, False, and -1. Only True are successes
             test_results = [1 if r == True else 0 for r in this_results.test_results]
 
-            while len(test_results) <= this_results.num_tests:
-                # if tests are missing, they failed
-                test_results.append(0)
+            # while len(test_results) <= this_results.num_tests:
+            #     # if tests are missing, they failed
+            #     test_results.append(0)
+            if not test_results:
+                continue
 
             test_results = np.array(test_results)
             per_problem_accuracies.append(np.mean(test_results))
@@ -208,10 +210,8 @@ def main(args):
 
     if args.print_results:
         results = {}
-        codes_loc = os.path.join(args.save, f"all_codes.json")
-        if os.path.exists(codes_loc):
-            results_loc = os.path.join(args.save, f"all_results.pkl") 
-        else:
+        results_loc = os.path.join(args.save, f"all_results.pkl") 
+        if not os.path.exists(results_loc):
             results_loc = os.path.join(args.save, f"{args.start}-{args.end}_results.pkl") 
         with open(results_loc, "rb") as f: 
             results = pickle.load(f)

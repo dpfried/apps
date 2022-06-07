@@ -19,7 +19,7 @@ from reindent import run as run_reindent
 
 import sys
 sys.path.append("../train")
-from dataset_apps.APPSBaseDataset import APPSBaseDataset
+from dataset_apps.APPSBaseDataset import APPSBaseDataset, FORMATTING_TYPES
 
 # for timing and debugging
 from datetime import datetime, date
@@ -128,6 +128,8 @@ def main(args):
             end = args.end
         problems = problems[start:end]
 
+    formatting_type = args.formatting_type
+
     print("Loading model...")
     if args.arch.startswith("facebook/incoder"):
         global MAX_LENGTH
@@ -145,7 +147,8 @@ def main(args):
         model = transformers.AutoModelForCausalLM.from_pretrained(args.load or args.arch, **kwargs)
 
         stop_words = ["<|", "<|/", "<code>", "</code>", "<cell>", "</cell>", "<text>", "</text>"]
-        notebook_formatting = True
+        if formatting_type is None:
+            formatting_type = "notebook"
     else:
         # Tokenizer
         tokenizer = transformers.GPT2Tokenizer.from_pretrained(args.arch)
@@ -154,7 +157,10 @@ def main(args):
         model = transformers.AutoModelForCausalLM.from_pretrained(args.load)
 
         stop_words = ["ANSWER:"]
-        notebook_formatting = False
+        if formatting_type is None:
+            formatting_type = "qa"
+        if formatting_type != "qa":
+            raise NotImplementedError("need to handle stopwords for non-qa types for non-incoder models")
 
     model.cuda()
     print(f"Loaded {args.arch}: {args.load or ''}.")
@@ -163,9 +169,9 @@ def main(args):
         samples = APPSBaseDataset.load_samples(dataroot, problem_name, require_solutions=False)
         if samples is None:
             return None, None, None
-        short_sol = min(samples, key=lambda sample:len(sample.sol_str))
+        short_sol = min(samples, key=lambda sample:len(sample.sol_str)).sol_str
         sample_sol = random.choice(samples).sol_str
-        prompt_text = APPSBaseDataset.prompt_from_sample(samples[0], notebook_formatting=notebook_formatting)
+        prompt_text = APPSBaseDataset.prompt_from_sample(samples[0], formatting_type=formatting_type)
 
         # peek at part of the solution
         if args.peeking > 0.0:
@@ -186,8 +192,10 @@ def main(args):
             if prompt_text is None:
                 continue
             this_prompt = prompt_text + short_sol
-            if notebook_formatting:
+            if formatting_type == "notebook":
                 this_prompt += "\n</cell>"
+            elif formatting_type == "stackoverflow":
+                raise NotImplementedError("k-shot stackoverflow prompting")
             k_shot_prompts.append(this_prompt)
             if len(k_shot_prompts) >= args.k_shot_prompts:
                 break
@@ -301,6 +309,7 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--index", default=None, type=int)
     parser.add_argument("-d", "--debug", action="store_true")
     parser.add_argument("--save", type=str, default="./results")
+    parser.add_argument("--formatting_type", choices=FORMATTING_TYPES)
 
     parser.add_argument("--k_shot_prompts", type=int, default=0)
  
