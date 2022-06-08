@@ -32,10 +32,16 @@ def print_results(results, args):
 
     error_counter = Counter()
 
+    oracle_all_correct = []
+
+    candidates_per_problem = []
+
     for index in results:
         results_per_output: List[test_util.TestResults] = results[index]
         assert len(results_per_output) == 1
         total_problems += 1
+        this_all_correct = []
+        candidates_per_problem.append(len(results_per_output))
         for this_results in results_per_output:
             if this_results.error is not None:
                 error_counter[this_results.error] += 1
@@ -54,6 +60,8 @@ def print_results(results, args):
             test_results = np.array(test_results)
             per_problem_accuracies.append(np.mean(test_results))
             all_correct.append(np.all(test_results))
+            this_all_correct.append(np.all(test_results))
+        oracle_all_correct.append(np.any(this_all_correct))
 
     print("errors:")
     print(error_counter.most_common())
@@ -61,9 +69,11 @@ def print_results(results, args):
     print(f"number of problems = {total_problems}")
     print(f"number of test cases = {total_testcases}")
     print(f"number of test cases run = {total_testcases_run}")
+    print(f"num candidates / problem = {np.mean(candidates_per_problem)}")
 
     print(f"Test Case Average (average accuracy over problems) = {np.mean(per_problem_accuracies)}")
     print(f"Strict Accuracy (all test cases passed / total problems) = {np.mean(all_correct)}")
+    print(f"Oracle Accuracy (all test cases passed for some candidate / total problems) = {np.mean(oracle_all_correct)}")
 
 def print_results_old(results, args):
     res = []
@@ -109,6 +119,7 @@ def eval_and_save_problems(args):
     gpt_bleu = {}
     gpt_codebleu = {}
     results = {}
+
     codes_loc = os.path.join(args.save, f"all_codes.json")
     results_loc = os.path.join(args.save, f"all_results.pkl") 
     if not os.path.exists(codes_loc):

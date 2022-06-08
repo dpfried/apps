@@ -29,33 +29,6 @@ MAX_LENGTH = 1024
 
 EXTENSION_LENGTH = 512
 
-
-def reindent_code(codestr):
-    """
-    Given code string, reindent it in the same way that the
-    Github dataset was indented
-    """
-    codestr = io.StringIO(codestr)
-    ret = io.StringIO()
-
-    run_reindent(
-        codestr, 
-        ret, 
-        config = {
-            "dry-run": False,
-            "help": False,
-            "to": 10,
-            "from": -1,
-            "tabs": True,
-            "encoding": "utf-8",
-            "is-tabs": False,
-            "tabsize": 10,
-            "all-tabs": False
-        }
-    )
-
-    return ret.getvalue()
-
 def truncate_at_stop_words(tokenizer, stop_words, sequence_ids, logprobs=None, show_warnings=True):
     # search for stopwords, to truncate after them
     full_seq_decoded = tokenizer.decode(sequence_ids, skip_special_tokens=False)
@@ -109,9 +82,13 @@ def main(args):
         args.end = end
         print(f"shard {args.shard}: [{args.start}, {args.end})")
 
+    # ncg_str = f"ncg-{args.num_candidates_generated}"
+
     if not args.end:
+        # codes_loc = os.path.join(args.save, f"all_codes_{ncg_str}.json")
         codes_loc = os.path.join(args.save, f"all_codes.json")
     else:
+        # codes_loc = os.path.join(args.save, f"{args.start}-{args.end}_codes_{ncg_str}.json")
         codes_loc = os.path.join(args.save, f"{args.start}-{args.end}_codes.json")
 
     # Only do the problems that are specified.
@@ -146,9 +123,12 @@ def main(args):
             kwargs = {}
         model = transformers.AutoModelForCausalLM.from_pretrained(args.load or args.arch, **kwargs)
 
+        model = model.half()
+
         stop_words = ["<|", "<|/", "<code>", "</code>", "<cell>", "</cell>", "<text>", "</text>"]
         if formatting_type is None:
             formatting_type = "notebook"
+        reindent_code = True
     else:
         # Tokenizer
         tokenizer = transformers.GPT2Tokenizer.from_pretrained(args.arch)
@@ -161,12 +141,14 @@ def main(args):
             formatting_type = "qa"
         if formatting_type != "qa":
             raise NotImplementedError("need to handle stopwords for non-qa types for non-incoder models")
+        
+        reindent_code = False
 
     model.cuda()
     print(f"Loaded {args.arch}: {args.load or ''}.")
 
     def generate_prompt_from_path(dataroot, problem_name):
-        samples = APPSBaseDataset.load_samples(dataroot, problem_name, require_solutions=False)
+        samples = APPSBaseDataset.load_samples(dataroot, problem_name, require_solutions=False, reindent_code=reindent_code)
         if samples is None:
             return None, None, None
         short_sol = min(samples, key=lambda sample:len(sample.sol_str)).sol_str
@@ -231,25 +213,43 @@ def main(args):
                 input_ids = tokenizer.encode(prompt_text, return_tensors='pt').cuda()
                 if input_ids.size(-1) >= MAX_LENGTH:
                     raise ValueError(f"input {problem} is too long; skipping")
-                output_ids = model.generate(
+                # TODO: subbatching if num_candidates_generated is too big for the GPU
+                batch_output_ids = model.generate(
                     input_ids,
                     #num_beams=args.num_beams,
                     #early_stopping=True,
                     do_sample=True, 
                     top_p=0.95,
-                    temperature=0.2,
+                    temperature=args.temperature,
                     max_length=min(MAX_LENGTH, input_ids.size(1) + EXTENSION_LENGTH),
+                    num_return_sequences=args.num_candidates_generated,
+                    # output_scores=True,
+                    # return_dict_in_generate=True,
                 )
+                # batch_output_ids = ret.sequences
                 if args.debug:
                     print("input size:")
                     print(input_ids.size())
                     print("output size:")
-                    print(output_ids.size())
-                output_ids = output_ids[0][input_ids.size(1):]
-                if stop_words:
-                    output_ids, output_str, _ = truncate_at_stop_words(tokenizer, stop_words, output_ids)
-                else:
-                    output_str = tokenizer.decode(output_ids)
+                    print(batch_output_ids.size())
+                batch_output_ids = batch_output_ids[:,input_ids.size(1):]
+
+                # # ncg x num_tokens_generated x vocab
+                # scores = torch.stack(ret.scores, 1)
+                # assert scores.size(0) == args.num_candidates_generated
+                # assert batch_output_ids.size(1) == scores.size(1)
+                # scores_selected = scores.gather(-1, batch_output_ids.unsqueeze(-1)).squeeze(-1)
+                # assert scores_selected.size(0) == batch_output_ids.size(0) == args.num_candidates_generated
+                # assert scores_selected.size(1) == batch_output_ids.size(1)
+                # assert batch_output_ids.size(1) + input_ids.size(1) == ret.sequences.size(1)
+
+                output_strs = []
+                for output_ids in batch_output_ids:
+                    if stop_words:
+                        _, output_str, _ = truncate_at_stop_words(tokenizer, stop_words, output_ids)
+                    else:
+                        output_str = tokenizer.decode(output_ids)
+                    output_strs.append(output_str)
         except Exception as e:
             if isinstance(e, UnboundLocalError) and str(e) == "local variable 'next_tokens' referenced before assignment":
                 # See https://github.com/huggingface/transformers/issues/5118
@@ -260,18 +260,21 @@ def main(args):
                 print("Unexpected exception in generating solution")
                 print(e)
             # Default to empty string on errors
-            output_str = ""
+            output_strs = ["" for _ in range(args.num_candidates_generated)]
         end = time.time()
 
-        if args.peeking == 1.0:
-            output_str = sample_sol
-        elif len(output_str):
-            output_str = output_str.replace("<|endoftext|>", "")
-            # split_str = "<cell>\n" if notebook_formatting else "ANSWER:\n"
-            # output_str = output_str.split(split_str)[1].replace("<|endoftext|>", "")
+        for i in range(len(output_strs)):
+            output_str = output_strs[i]
+            if args.peeking == 1.0:
+                output_str = sample_sol
+            elif len(output_str):
+                output_str = output_str.replace("<|endoftext|>", "")
+                # split_str = "<cell>\n" if notebook_formatting else "ANSWER:\n"
+                # output_str = output_str.split(split_str)[1].replace("<|endoftext|>", "")
+            output_strs[i] = output_str
 
         # Save the generated sol
-        gpt_codes[index+args.start] = output_str
+        gpt_codes[index+args.start] = output_strs
 
         if args.debug:
             print(f"Generation time: {end - start}")
@@ -302,6 +305,8 @@ if __name__ == "__main__":
     parser.add_argument("-l","--load", type=str)
     parser.add_argument("--peeking", default=0.0, type=float)
     parser.add_argument("--num-beams", default=5, type=int)
+    parser.add_argument("--num-candidates-generated", default=1, type=int)
+    parser.add_argument("--temperature", default=0.2, type=float)
     parser.add_argument("-s","--start", default=0, type=int)
     parser.add_argument("-e","--end", default=None, type=int)
     parser.add_argument("--shard", default=None, type=int)
