@@ -31,7 +31,7 @@ Sample = namedtuple("Sample", ["question_str", "starter_code", "sol_str", "answe
 
 FORMATTING_TYPES = ["qa", "notebook", "stackoverflow"]
 
-def reindent_code(codestr):
+def do_reindent_code(codestr):
     """
     Given code string, reindent it in the same way that the
     Github dataset was indented
@@ -101,7 +101,7 @@ class APPSBaseDataset(torch.utils.data.Dataset):
             with open(starter_code, 'r') as f:
                 starter_code = f.read()
             if reindent_code:
-                starter_code = reindent_code(starter_code)
+                starter_code = do_reindent_code(starter_code)
         else:
             starter_code = ""
 
@@ -121,7 +121,7 @@ class APPSBaseDataset(torch.utils.data.Dataset):
             sols_str_list = ['']
         else:
             with open(sols_fname, 'r') as f:
-                sols_str_list = [reindent_code(sol_str) if reindent_code else sol_str for sol_str in json.load(f)]
+                sols_str_list = [do_reindent_code(sol_str) if reindent_code else sol_str for sol_str in json.load(f)]
 
         samples = []
         # Read all the solutions
